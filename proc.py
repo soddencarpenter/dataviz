@@ -61,11 +61,11 @@ def load_and_conv_data_2020_2021(filename, station_records, skip_header):
         colid_start_station_id = 5  # believe uses new mapping
         colid_end_station_name = 6
         colid_end_station_id = 7
-        colid_start_lat = 9
-        colid_start_long = 10
-        colid_end_lat = 11
-        colid_end_long = 12
-        colid_member_casual = 13
+        colid_start_lat = 8
+        colid_start_long = 9
+        colid_end_lat = 10
+        colid_end_long = 11
+        colid_member_casual = 12
 
         # to match 2019 format, need to
         #  insert tripduration in seconds
@@ -108,6 +108,9 @@ def load_and_conv_data_2020_2021(filename, station_records, skip_header):
 
             outrow.append(row[colid_rideid])
             outrow.append(row[colid_rideable_type])
+
+            outrow.append(row[colid_member_casual])
+
             outrow.append(row[colid_started_at])
             outrow.append(row[colid_ended_at])
 
@@ -227,8 +230,12 @@ def load_and_conv_data_2019(filename, station_records, skip_header):
 
             outrow.append(row[colid_tripid])
             outrow.append(rideable_type)
+
+            outrow.append(row[colid_usertype])
+
             outrow.append(row[colid_start_time])
             outrow.append(row[colid_end_time])
+
             outrow.append(row[colid_tripduration])
 
             outrow.append(row[colid_from_station_name])
