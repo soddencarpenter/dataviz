@@ -37,11 +37,19 @@ Note there are several differences in the 2019 data from later datasets
    (see divvy.init.sql)
 
 1. Generate the import sql
-   # gen-import-sql.sh > divvyimp.sql
+   $ gen-import-sql.sh > divvyimp.sql
 
 1. Import the data
    (mysql in the appropriate directory; logged in)
    mysql> use divvy;
    mysql> source divvyimp.sql;
+
+
+## divvy_trip_history_201909-202108.csv set
+This is the dataset for class 4 "Divvy heatmap data". 
+
+1. Create the divvy database
+1. divvy-triphistory-init.sql will create a table divvy_trips
+1. The gen-triphistory-import-sql.sh will generate an import statement
 
 
