@@ -1,12 +1,25 @@
 import pandas as pd
 import numpy as np
-import datetime as datetime
+import datetime as dt
 import pandas.api.types as pt
+import pytz as pytz
+
+from astral import LocationInfo
+from astral.sun import sun
+from astral.geocoder import add_locations, database, lookup
+
+from dateutil import parser as du_pr
 
 from pathlib import Path
 
+db = database()
 
-rev = "3"
+TZ=pytz.timezone('US/Central')
+chi_town = lookup('Chicago', db)
+print(chi_town)
+
+
+rev = "5"
 
 input_dir = '/mnt/d/DivvyDatasets'
 input_divvy_basename = "divvy_trip_history_201909-202108"
@@ -39,6 +52,19 @@ def update_dow_to_category(df):
 
 
 
+
+def update_start_cat_to_category(df):
+  cats = ['AM_EARLY', 'AM_RUSH', 'AM_MID',
+            'LUNCH',
+            'PM_EARLY', 'PM_RUSH', 'PM_EVENING', 'PM_LATE']
+
+  cats_type = pt.CategoricalDtype(categories=cats, ordered=True)
+  df['start_cat'] = df['start_cat'].astype(cats_type)
+
+  return df
+
+
+
 #
 # loads and returns the rev file as a data frame. It handles
 #   the need to specify some column types
@@ -49,6 +75,7 @@ def load_divvy_dataframe(filename):
   print("Loading " + filename)
   # so need to set the type on a couple of columns
   col_names = pd.read_csv(filename, nrows=0).columns
+
   types_dict = { 'ride_id': str, 
     'start_station_id': str,
     'end_station_id': str,
@@ -62,11 +89,20 @@ def load_divvy_dataframe(filename):
     'avg_rain_intensity_mm/hour': float,
     'avg_wind_speed': float,
     'max_wind_speed': float,
-    'total_solar_radiation': int
+    'total_solar_radiation': int,
+    'is_dark': bool
     }
   types_dict.update({col: str for col in col_names if col not in types_dict})
 
-  return pd.read_csv(filename, dtype=types_dict)
+  date_cols=['started_at','ended_at','date']
+
+  df = pd.read_csv(filename, dtype=types_dict, parse_dates=date_cols)
+
+  if 'start_time' in df:
+    print("Converting start_time")
+    df['start_time'] = df['start_time'].apply(lambda x: dt.datetime.strptime(x, "%H:%M:%S"))
+
+  return df
 
 
 
@@ -77,9 +113,7 @@ def yrmo(year, month):
 
 
 def calc_duration_in_minutes(started_at, ended_at):
-    st = datetime.datetime.strptime(started_at, '%Y-%m-%d %H:%M:%S')
-    en = datetime.datetime.strptime(ended_at, '%Y-%m-%d %H:%M:%S')
-    diff = en - st
+    diff = ended_at - started_at
     return diff.total_seconds() / 60
 
 
@@ -90,8 +124,68 @@ def calc_duration_in_minutes(started_at, ended_at):
 #
 def load_temperature_dataframe():
   print("Loading " + input_chitemp)
-  return pd.read_csv(input_chitemp)
+  df = pd.read_csv(input_chitemp)
 
+  print("Converting date")
+  df['date'] = df['date'].apply(lambda x: dt.datetime.strptime(x, "%Y-%m-%d"))
+
+  return df
+
+
+
+
+def add_start_time(started_at):
+    return started_at.time()
+
+
+
+
+def add_start_cat(started_at):
+  start_time = started_at.time()
+  time_new_day = dt.time(00,00)
+  time_am_rush_start = dt.time(7,00)
+  time_am_rush_end = dt.time(9,00)
+
+  time_lunch_start = dt.time(11,30)
+  time_lunch_end = dt.time(13,00)
+
+  time_pm_rush_start = dt.time(15,30)
+  time_pm_rush_end = dt.time(19,00)
+
+  time_evening_end = dt.time(23,00)
+
+
+  if start_time >= time_new_day and start_time < time_am_rush_start:
+    return 'AM_EARLY'
+
+  if start_time >= time_am_rush_start and start_time < time_am_rush_end:
+    return 'AM_RUSH'
+
+  if start_time >= time_am_rush_end and start_time < time_lunch_start:
+    return 'AM_MID'
+
+  if start_time >= time_lunch_start and start_time < time_lunch_end:
+    return 'LUNCH'
+
+  # slight change on Chi rush from 15:00 to 15:30
+  if start_time >= time_lunch_end and start_time < time_pm_rush_start:
+    return 'PM_EARLY'
+
+  if start_time >= time_pm_rush_start and start_time < time_pm_rush_end:
+    return 'PM_RUSH'
+
+  if start_time >= time_pm_rush_end and start_time < time_evening_end:
+    return 'PM_EVENING'
+
+  return 'PM_LATE'
+
+
+
+
+def add_is_dark(started_at):
+  st = started_at.replace(tzinfo=TZ)
+  chk = sun(chi_town.observer, date=st, tzinfo=chi_town.timezone)
+  return st >= chk['dusk'] or st <= chk['dawn']
 
 
 
@@ -102,37 +196,67 @@ def load_temperature_dataframe():
 def process_raw_divvy(filename):
   df_divvy = load_divvy_dataframe(filename)
 
-  df_chitemp = load_temperature_dataframe()
+  print("Creating additional columns")
+  data = pd.Series(df_divvy.apply(lambda x: [
+                    add_start_time(x['started_at']),
+                    add_is_dark(x['started_at']),
+                    yrmo(x['year'], x['month']),
+                    calc_duration_in_minutes(x['started_at'], x['ended_at']),
+                    add_start_cat(x['started_at'])
+                  ], axis = 1))
 
-  #
-  # add a year-month column to the divvy dataframe
-  #  this uses a function with the row; it is not
-  #  the absolute fastest way
-  #
-  print("Adding year-month as yrmo")
-  df_divvy['yrmo'] = df_divvy.apply(lambda row: yrmo(row['year'], row['month']),
-                                      axis = 1)
+  new_df = pd.DataFrame(data.tolist(),
+                        data.index, 
+                        columns=['start_time','is_dark','yrmo','duration','start_cat'])
 
-  #
-  # we also want a duration to be calculated
-  #
-  print("Adding duration")
-  df_divvy['duration'] = df_divvy.apply(lambda row: calc_duration_in_minutes(row['started_at'],
-                                                      row['ended_at']),
-                                      axis = 1)
+  df_divvy = df_divvy.merge(new_df, left_index=True, right_index=True)
+
+
+  # #
+  # # add a simplistic time element
+  # #
+  # print("Adding start_time")
+  # df_divvy['start_time'] = df_divvy.apply(lambda row: add_start_time(row['started_at']), axis = 1)
+
+  # print("Adding start_cat")
+  # df_divvy['start_cat'] = df_divvy.apply(lambda row: add_start_cat(row['start_time']), axis = 1)
+
+  # #
+  # # is it dark
+  # #
+  # print("Adding is_dark")
+  # df_divvy['is_dark'] = df_divvy.apply(lambda row: add_is_dark(row['started_at']), axis = 1)
+
+
+  # #
+  # # add a year-month column to the divvy dataframe
+  # #  this uses a function with the row; it is not
+  # #  the absolute fastest way
+  # #
+  # print("Adding year-month as yrmo")
+  # df_divvy['yrmo'] = df_divvy.apply(lambda row: yrmo(row['year'], row['month']),
+  #                                     axis = 1)
+
+  # #
+  # # we also want a duration to be calculated
+  # #
+  # print("Adding duration")
+  # df_divvy['duration'] = df_divvy.apply(lambda row: calc_duration_in_minutes(row['started_at'],
+  #                                                     row['ended_at']),
+  #                                     axis = 1)
 
   #
   # add the temperature
   #
+  df_chitemp = load_temperature_dataframe()
+
   print("Merging in temperature")
-  df_divvy = pd.merge(df_divvy, df_chitemp,
-    on="date")
+  df_divvy = pd.merge(df_divvy, df_chitemp, on="date")
   print(df_divvy.shape)
   print(df_divvy.head())
   # print(df_divvy.loc[df_divvy['date'] == '2020-02-21']) # 2020-02-21 was missing in org. temp
 
-  print(df_divvy.info())  # shows mem usage, other info
-  print(df_divvy[['ride_id','member_casual','date','duration','yrmo','avg_temperature_fahrenheit']])
+  # print(df_divvy[['ride_id','member_casual','date','duration','yrmo','avg_temperature_fahrenheit','start_time','start_cat']])
 
   #
   # clean the dataframe to remove invalid durations
@@ -140,14 +264,16 @@ def process_raw_divvy(filename):
   #
   print("Removing invalid durations")
   df_divvy = df_divvy[(df_divvy.duration >= 1.2) & (df_divvy.duration < 60 * 12)]
-  print(df_divvy.shape)
+  # print(df_divvy.shape)
 
   df_divvy = update_dow_to_category(df_divvy)
+  df_divvy = update_start_cat_to_category(df_divvy)
 
   #
   # drop some bogus columns
   #
-  df_divvy.drop(df_divvy.columns[[0,30]], axis=1, inplace=True)
+  print("Dropping columns")
+  df_divvy.drop(df_divvy.columns[[0,-1]], axis=1, inplace=True)
 
   return df_divvy
 
@@ -159,21 +285,29 @@ def process_raw_divvy(filename):
 #
 def save_dataframe(df, filename):
   print("Saving dataframe to " + filename)
-  df.to_csv(filename, index=False)
+  df_out = df.copy()
+  df_out['date'] = df_out['date'].map(lambda x: dt.datetime.strftime(x, '%Y-%m-%d'))
+  df_out.to_csv(filename, index=False, date_format="%Y-%m-%d %H:%M:%S")
 
 
 #
 # load the divvy csv into a data frame
 #
+
+
 if rev_file_exists():
   df_divvy = load_divvy_dataframe(input_divvy_rev)
   df_divvy = update_dow_to_category(df_divvy)
+  df_divvy = update_start_cat_to_category(df_divvy)
 else:
   df_divvy = process_raw_divvy(input_divvy_raw)
   save_dataframe(df_divvy, input_divvy_rev)
 
 print(df_divvy)
 df_divvy.info()
+
+
+
 
 
 
