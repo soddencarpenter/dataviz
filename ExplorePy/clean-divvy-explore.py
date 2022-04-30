@@ -19,7 +19,7 @@ chi_town = lookup('Chicago', db)
 print(chi_town)
 
 
-rev = "5"
+rev = "6"
 
 input_dir = '/mnt/d/DivvyDatasets'
 input_divvy_basename = "divvy_trip_history_201909-202108"
@@ -27,7 +27,7 @@ input_divvy_base = input_dir + "/" + input_divvy_basename
 input_divvy_raw = input_divvy_base + ".csv"
 input_divvy_rev = input_dir + "/rev" + rev + "-" + input_divvy_basename + ".csv"
 input_chitemp = input_dir + "/" + "ChicagoTemperature.csv"
-
+input_factors = input_dir + "/" + "daily_rides_and_factors.csv"
 
 #
 #  returns true if the rev file is already present
@@ -96,7 +96,8 @@ def load_divvy_dataframe(filename):
 
   date_cols=['started_at','ended_at','date']
 
-  df = pd.read_csv(filename, dtype=types_dict, parse_dates=date_cols)
+  df = pd.read_csv(filename, dtype=types_dict,
+                   parse_dates=date_cols)
 
   if 'start_time' in df:
     print("Converting start_time")
@@ -124,13 +125,31 @@ def calc_duration_in_minutes(started_at, ended_at):
 #
 def load_temperature_dataframe():
   print("Loading " + input_chitemp)
-  df = pd.read_csv(input_chitemp)
 
-  print("Converting date")
-  df['date'] = df['date'].apply(lambda x: dt.datetime.strptime(x, "%Y-%m-%d"))
+  date_cols=['date']
+  df = pd.read_csv(input_chitemp,
+                   parse_dates=date_cols)
+
 
   return df
 
+
+
+
+#
+# load the chicago temperature into a data frame
+#
+def load_factors_dataframe():
+  print("Loading " + input_factors)
+
+  date_cols=['date']
+  df = pd.read_csv(input_factors,
+                    parse_dates=date_cols)
+
+#  print("Converting date")
+#  df['date'] = df['date'].apply(lambda x: dt.datetime.strptime(x, "%Y-%m-%d"))
+
+  return df
 
 
 
@@ -149,7 +168,7 @@ def add_start_cat(started_at):
   time_lunch_start = dt.time(11,30)
   time_lunch_end = dt.time(13,00)
 
-  time_pm_rush_start = dt.time(15,30)
+  time_pm_rush_start = dt.time(16,30)
   time_pm_rush_end = dt.time(19,00)
 
   time_evening_end = dt.time(23,00)
@@ -189,6 +208,7 @@ def add_is_dark(started_at):
 
 
 
+
 #
 # handles loading and processing the divvy raw data by
 #   adding columns, removing bad data, etc.
@@ -205,45 +225,13 @@ def process_raw_divvy(filename):
                     add_start_cat(x['started_at'])
                   ], axis = 1))
 
+  print("Creating temp dataframe")
   new_df = pd.DataFrame(data.tolist(),
                         data.index, 
                         columns=['start_time','is_dark','yrmo','duration','start_cat'])
 
+  print("Merging columns to divy dataframe")
   df_divvy = df_divvy.merge(new_df, left_index=True, right_index=True)
-
-
-  # #
-  # # add a simplistic time element
-  # #
-  # print("Adding start_time")
-  # df_divvy['start_time'] = df_divvy.apply(lambda row: add_start_time(row['started_at']), axis = 1)
-
-  # print("Adding start_cat")
-  # df_divvy['start_cat'] = df_divvy.apply(lambda row: add_start_cat(row['start_time']), axis = 1)
-
-  # #
-  # # is it dark
-  # #
-  # print("Adding is_dark")
-  # df_divvy['is_dark'] = df_divvy.apply(lambda row: add_is_dark(row['started_at']), axis = 1)
-
-
-  # #
-  # # add a year-month column to the divvy dataframe
-  # #  this uses a function with the row; it is not
-  # #  the absolute fastest way
-  # #
-  # print("Adding year-month as yrmo")
-  # df_divvy['yrmo'] = df_divvy.apply(lambda row: yrmo(row['year'], row['month']),
-  #                                     axis = 1)
-
-  # #
-  # # we also want a duration to be calculated
-  # #
-  # print("Adding duration")
-  # df_divvy['duration'] = df_divvy.apply(lambda row: calc_duration_in_minutes(row['started_at'],
-  #                                                     row['ended_at']),
-  #                                     axis = 1)
 
   #
   # add the temperature
@@ -254,9 +242,11 @@ def process_raw_divvy(filename):
   df_divvy = pd.merge(df_divvy, df_chitemp, on="date")
   print(df_divvy.shape)
   print(df_divvy.head())
-  # print(df_divvy.loc[df_divvy['date'] == '2020-02-21']) # 2020-02-21 was missing in org. temp
 
-  # print(df_divvy[['ride_id','member_casual','date','duration','yrmo','avg_temperature_fahrenheit','start_time','start_cat']])
+  print("Merging in factors/events")
+  df_factors = load_factors_dataframe()
+  df_divvy = pd.merge(df_divvy, df_factors, on="date")
+  print(df_divvy.shape)
 
   #
   # clean the dataframe to remove invalid durations
@@ -302,6 +292,7 @@ if rev_file_exists():
 else:
   df_divvy = process_raw_divvy(input_divvy_raw)
   save_dataframe(df_divvy, input_divvy_rev)
+
 
 print(df_divvy)
 df_divvy.info()
